@@ -1,0 +1,179 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Stock Analyzer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="container">
+    <h1>Stock Market Analyzer</h1>
+
+    <div class="input-section">
+      <h3>1. Upload Data</h3>
+      <div class="controls">
+        <label for="csvFile">Upload CSV (date,price)</label>
+        <input id="csvFile" type="file" accept=".csv" />
+        <button id="btnUpload" class="primary">Upload & Process</button>
+      </div>
+    </div>
+
+    <div id="loading" class="spinner" style="display:none;">Processing Data...</div>
+
+    <hr />
+
+    <div class="result" id="resultBox" style="display:none;">
+      <h3>2. Analysis Result</h3>
+      <p id="summary"></p>
+      <div class="chart-container">
+        <canvas id="chart"></canvas>
+      </div>
+    </div>
+  </div>
+
+<script>
+const apiUrl = '/api/process_csv';
+const loadingEl = document.getElementById('loading');
+
+// --- CHART RENDERING LOGIC (Improved for Buy/Sell Highlights) ---
+
+function drawChart(data, buyIndex, sellIndex) {
+  const chartCanvas = document.getElementById('chart');
+  
+  if (window.myChart) {
+    window.myChart.destroy();
+  }
+
+  // 1. Point Color Styling: Green for buy, Red for sell
+  const pointColorCallback = (context) => {
+    const xIndex = context.parsed.x; 
+    if (xIndex === buyIndex) return 'var(--color-success)'; // Green for Buy
+    if (xIndex === sellIndex) return 'var(--color-danger)';  // Red for Sell
+    return 'rgba(59, 130, 246, 0.5)'; // Default point color
+  };
+
+  // 2. Line Segment Styling: Gold for the profitable trade period
+  const segmentBorderColorCallback = (context) => {
+    const p0Index = context.p0.parsed.x;
+    const p1Index = context.p1.parsed.x;
+    // Check if the segment is within the best trade period (buyIndex to sellIndex)
+    const isTradeSegment = p0Index >= buyIndex && p1Index <= sellIndex && buyIndex !== sellIndex;
+    return isTradeSegment ? 'var(--color-warning)' : 'var(--color-primary)'; // Gold or Blue
+  };
+  
+  // 3. Line Width: Make the profitable segment line thicker
+  const segmentLineWidthCallback = (context) => {
+      const p0Index = context.p0.parsed.x; 
+      const p1Index = context.p1.parsed.x;
+      const isTradeSegment = p0Index >= buyIndex && p1Index <= sellIndex && buyIndex !== sellIndex;
+      return isTradeSegment ? 4 : 2; // Thicker line for the highlighted segment
+  };
+  
+  window.myChart = new Chart(chartCanvas, {
+    type: 'line',
+    data: {
+      labels: data.map(p => p.date),
+      datasets: [{
+        label: 'Stock Price',
+        data: data.map(p => p.price),
+        fill: false,
+        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+        borderColor: 'var(--color-primary)',
+        borderWidth: 2,
+        tension: 0.1,
+        
+        // Apply point and segment styles
+        pointBackgroundColor: pointColorCallback, 
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        
+        elements: {
+            line: {
+                segment: {
+                    borderColor: segmentBorderColorCallback,
+                    borderWidth: segmentLineWidthCallback,
+                }
+            }
+        }
+      }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+            x: {
+                title: { display: true, text: 'Date' }
+            },
+            y: {
+                title: { display: true, text: 'Price (₹)' }
+            }
+        },
+        plugins: {
+            legend: { display: false },
+            tooltip: { mode: 'index', intersect: false }
+        }
+    }
+  });
+}
+
+function showResult(data) {
+  document.getElementById('resultBox').style.display = 'block';
+  const buy = data.best_buy;
+  const sell = data.best_sell;
+  const profit = sell.price - buy.price;
+  const profitStr = profit.toFixed(2);
+  const dataSeries = data.series;
+  
+  const summaryEl = document.getElementById('summary');
+  let summaryHTML = `Best Trade Summary: Buy on ${buy.date} at ₹${buy.price.toFixed(2)} and Sell on ${sell.date} at ₹${sell.price.toFixed(2)}. `;
+  
+  if (profit > 0) {
+      summaryHTML += `Profit: <span class="profit-highlight">₹${profitStr}</span>. 🎉`;
+  } else {
+      summaryHTML += `Best possible trade resulted in a <span class="loss-highlight">Loss/No Profit: ₹${profitStr}</span>. 😔`;
+  }
+
+  summaryEl.innerHTML = summaryHTML;
+  
+  drawChart(dataSeries, buy.index, sell.index);
+}
+
+
+// --- CORE FILE PROCESSING LOGIC ---
+
+async function processFile(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  const res = await fetch(apiUrl, {
+    method: 'POST',
+    body: formData
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Server error');
+  return data;
+}
+
+// Event Listener for the only remaining button: CSV Upload
+document.getElementById('btnUpload').addEventListener('click', async () => {
+  const f = document.getElementById('csvFile').files[0];
+  if (!f) return alert('Please select a CSV file first.');
+  
+  loadingEl.style.display = 'block';
+  document.getElementById('resultBox').style.display = 'none';
+
+  try {
+    const data = await processFile(f);
+    if (data.error) throw new Error(data.error);
+    showResult(data);
+  } catch (err) {
+    alert('Error: ' + err.message);
+  } finally {
+    loadingEl.style.display = 'none';
+  }
+});
+</script>
+</body>
+</html>
